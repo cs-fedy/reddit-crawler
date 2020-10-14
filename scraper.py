@@ -1,5 +1,5 @@
-from selenium import webdriver
 from bs4 import BeautifulSoup
+from selenium import webdriver
 import time
 
 # TODO: use IP Rotation
@@ -25,6 +25,43 @@ def load_full_page(browser, page_url):
     return browser.page_source
 
 
+class ScrapeProxies:
+    def __init__(self, browser=None):
+        self.page_url = 'https://free-proxy-list.net/'
+        if not browser:
+            self.browser = create_headless_browser()
+        else:
+            self.browser = browser
+        self.__get_data()
+
+    @staticmethod
+    def __get_table_proxies(source_code):
+        soup = BeautifulSoup(source_code, 'html.parser')
+        table_rows = soup.select('#proxylisttable tbody tr')
+        proxies = []
+        for row in table_rows:
+            columns = row.findAll("td")
+            if columns[-2].getText() == 'yes':
+                proxies.append(f'https://{columns[0].getText()}:{columns[1].getText()}')
+        return proxies
+
+    def __get_proxies(self):
+        next_button = self.browser.find_element(value='proxylisttable_next')
+        proxies = []
+        while 'disabled' not in next_button.get_attribute('class'):
+            source_code = self.browser.page_source
+            tables_proxies = self.__get_table_proxies(source_code)
+            proxies.extend(tables_proxies)
+            next_button.find_element_by_tag_name("a").click()
+            next_button = self.browser.find_element(value='proxylisttable_next')
+        return proxies
+
+    def __get_data(self):
+        self.browser.get(self.page_url)
+        time.sleep(1)
+        proxies = self.__get_proxies()
+
+
 class ScrapeCommunitiesURLS:
     def __init__(self, browser=None):
         self.url = 'https://www.reddit.com/subreddits/'
@@ -32,6 +69,7 @@ class ScrapeCommunitiesURLS:
             self.browser = create_headless_browser()
         else:
             self.browser = browser
+        self.proxies = ScrapeProxies(self.browser)
 
     def __get_category_urls(self, link):
         source_code = load_full_page(self.browser, link)
@@ -41,8 +79,8 @@ class ScrapeCommunitiesURLS:
     def __call__(self):
         communities_urls = []
         for index in range(26):
-            url = f'{self.url}{chr(index + 97)}-1'
-            communities_urls += self.__get_category_urls(url)
+            communities_category = f'{self.url}{chr(index + 97)}-1'
+            communities_urls += self.__get_category_urls(communities_category)
         communities_urls += self.__get_category_urls(f'{self.url}0-1')
         return communities_urls
 
@@ -94,8 +132,8 @@ class ScrapCommunity:
 
     def __call__(self):
         source_code = load_full_page(self.browser, self.communityURL)
-        return self.__scrape_post_details('https://www.reddit.com/r/pycharm/comments/8i3v9e/jetbrains_pycharm_rules/')
-
+        posts_urls = self.__get_posts_urls()
+        
 
 if __name__ == '__main__':
     headless_browser = create_headless_browser()
