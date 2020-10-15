@@ -1,6 +1,12 @@
+import psycopg2
 from bs4 import BeautifulSoup
+from selenium.webdriver.chrome.options import Options
 from selenium import webdriver
+from dotenv import load_dotenv
+import os
 import time
+
+load_dotenv()
 
 # TODO: use IP Rotation
 # TODO: Set a Real User Agent
@@ -11,11 +17,10 @@ import time
 
 
 def create_headless_browser():
-    # options = Options()
-    # options.set_headless()
-    # assert options.headless  # assert Operating in headless mode
-    # return webdriver.Chrome(options=options)
-    return webdriver.Chrome()
+    options = Options()
+    options.add_argument('--headless')
+    assert options.headless  # assert Operating in headless mode
+    return webdriver.Chrome(options=options)
 
 
 def load_full_page(browser, page_url):
@@ -26,13 +31,9 @@ def load_full_page(browser, page_url):
 
 
 class ScrapeProxies:
-    def __init__(self, browser=None):
+    def __init__(self, browser):
         self.page_url = 'https://free-proxy-list.net/'
-        if not browser:
-            self.browser = create_headless_browser()
-        else:
-            self.browser = browser
-        self.__get_data()
+        self.browser = browser
 
     @staticmethod
     def __get_table_proxies(source_code):
@@ -56,43 +57,81 @@ class ScrapeProxies:
             next_button = self.browser.find_element(value='proxylisttable_next')
         return proxies
 
-    def __get_data(self):
+    def get_data(self):
         self.browser.get(self.page_url)
         time.sleep(1)
-        proxies = self.__get_proxies()
+        return self.__get_proxies()
 
 
 class DB:
     def __init__(self, data):
         self.data = data
+        self.__POSTGRES_DB = os.getenv("POSTGRES_DB")
+        self.__POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
+        self.__POSTGRES_USER = os.getenv("POSTGRES_USER")
+        self.connection = None
+        self.cursor = None
+        self.connect()
+
+    def connect(self):
+        try:
+            self.connection = psycopg2.connect(user=self.__POSTGRES_USER,
+                                               password=self.__POSTGRES_PASSWORD,
+                                               host="127.0.0.1",
+                                               port="5432",
+                                               database=self.__POSTGRES_DB)
+            self.cursor = self.connection.cursor()
+            print("connected to db successfully")
+        except (Exception, psycopg2.Error) as error:
+            raise Exception(f"failed to connect to db {error}")
+
+    def close_connection(self):
+        self.cursor.close()
+        self.connection.close()
+        print("PostgreSQL connection is closed")
+
+    def drop_tables(self, tables_names):
+        for table_name in tables_names:
+            drop_table_query = f"DROP TABLE IF EXISTS {table_name} CASCADE"
+            self.cursor.execute(drop_table_query)
+            self.connection.commit()
+            print(f"table {table_name} dropped")
 
 
 class CrawlReddit:
-    def __init__(self, browser=None):
-        if not browser:
-            self.browser = create_headless_browser()
-        else:
-            self.browser = browser
-        self.proxies = ScrapeProxies(self.browser)
+    def __init__(self):
+        self.browser = create_headless_browser()
+        self.proxies = ScrapeProxies(self.browser).get_data()
+
+    def __create_headless_browser_proxy(self):
+        current_proxy, browser = self.proxies[-1], None
+        try:
+            print(f'@@@ trying {current_proxy} @@@')
+            browser = webdriver.Chrome()
+        except:
+            print(f'@@@ failed connecting to {current_proxy} @@@')
+            self.proxies.pop()
+            self.__create_headless_browser_proxy()
+        return browser
 
     def __get_communities_data(self, urls):
-        return [ScrapCommunity(community_url, self.browser) for community_url in urls]
+        communities_data = []
+        for community_url in urls:
+            browser = self.__create_headless_browser_proxy()
+            communities_data.append(ScrapCommunity(community_url, browser))
+        return communities_data
 
     def __call__(self):
-        urls = ScrapeCommunitiesURLS(self.proxies, self.browser)
+        urls = ScrapeCommunitiesURLS(self.browser)
         communities_data = self.__get_communities_data(urls)
-
         # * store data in postgresql db:
         DB(communities_data)
 
 
 class ScrapeCommunitiesURLS:
-    def __init__(self, proxies, browser=None):
+    def __init__(self, browser):
         self.url = 'https://www.reddit.com/subreddits/'
-        if not browser:
-            self.browser = create_headless_browser()
-        else:
-            self.browser = browser
+        self.browser = browser
         self.__get_urls()
 
     def __get_category_urls(self, link):
@@ -113,14 +152,14 @@ class ScrapeCommunitiesURLS:
 
 
 class ScrapCommunity:
-    def __init__(self, communityURL, browser=None):
+    def __init__(self, communityURL, browser):
+        self.browser = browser
         self.communityURL = communityURL
         self.scroll_level = 2
-        if not browser:
-            self.browser = create_headless_browser()
-        else:
-            self.browser = browser
         self.__get_data()
+
+    def __create_headless_browser(self):
+        pass
 
     def __scroll_page(self):
         scrolling_script = "window.scrollTo(0,document.body.scrollHeight)"
@@ -168,6 +207,4 @@ class ScrapCommunity:
         
 
 if __name__ == '__main__':
-    headless_browser = create_headless_browser()
-    cr = CrawlReddit(headless_browser)
-    print(cr())
+    cr = CrawlReddit()
