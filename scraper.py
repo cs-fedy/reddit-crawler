@@ -3,10 +3,12 @@ from bs4 import BeautifulSoup
 from selenium.webdriver.chrome.options import Options
 from selenium import webdriver
 from dotenv import load_dotenv
+import requests
 import os
 import time
 
 load_dotenv()
+
 
 # TODO: use IP Rotation
 # TODO: Set a Real User Agent
@@ -31,9 +33,9 @@ def load_full_page(browser, page_url):
 
 
 class ScrapeProxies:
-    def __init__(self, browser):
+    def __init__(self):
         self.page_url = 'https://free-proxy-list.net/'
-        self.browser = browser
+        self.browser = self.browser = create_headless_browser()
 
     @staticmethod
     def __get_table_proxies(source_code):
@@ -99,112 +101,86 @@ class DB:
 
 
 class CrawlReddit:
-    def __init__(self):
-        self.browser = create_headless_browser()
-        self.proxies = ScrapeProxies(self.browser).get_data()
-
-    def __create_headless_browser_proxy(self):
-        current_proxy, browser = self.proxies[-1], None
-        try:
-            print(f'@@@ trying {current_proxy} @@@')
-            browser = webdriver.Chrome()
-        except:
-            print(f'@@@ failed connecting to {current_proxy} @@@')
-            self.proxies.pop()
-            self.__create_headless_browser_proxy()
-        return browser
-
-    def __get_communities_data(self, urls):
+    @staticmethod
+    def __get_communities_data(names):
         communities_data = []
-        for community_url in urls:
-            browser = self.__create_headless_browser_proxy()
-            communities_data.append(ScrapCommunity(community_url, browser))
+        for community_name in names:
+            communities_data.append(ScrapCommunity(community_name))
         return communities_data
 
     def __call__(self):
-        urls = ScrapeCommunitiesURLS(self.browser)
-        communities_data = self.__get_communities_data(urls)
+        names = ScrapeCommunitiesNames().get_names()
+        communities_data = self.__get_communities_data(names)
         # * store data in postgresql db:
         DB(communities_data)
 
 
-class ScrapeCommunitiesURLS:
-    def __init__(self, browser):
+class ScrapeCommunitiesNames:
+    def __init__(self):
         self.url = 'https://www.reddit.com/subreddits/'
-        self.browser = browser
-        self.__get_urls()
 
-    def __get_category_urls(self, link):
-        source_code = load_full_page(self.browser, link)
+    @staticmethod
+    def __get_category_names(link):
+        source_code = requests.get(link, timeout=2).content
         soup = BeautifulSoup(source_code, 'html.parser')
-        return [link['href'] for link in soup.select('.community-link')]
+        return [link.getText() for link in soup.select('.community-link')]
 
-    def __get_urls(self):
+    def get_names(self):
         # * Get categories urls:
         urls = [f'{self.url}{chr(index + 97)}-1' for index in range(26)]
         urls.append(f'{self.url}0-1')
 
-        # * Get communities urls:
-        communities_urls = []
+        # * Get communities Names:
+        communities_names = []
         for category_url in urls:
-            communities_urls += self.__get_category_urls(category_url)
-        return communities_urls
+            communities_names += self.__get_category_names(category_url)
+        return communities_names
 
 
 class ScrapCommunity:
-    def __init__(self, communityURL, browser):
-        self.browser = browser
-        self.communityURL = communityURL
+    def __init__(self, community_name):
+        self.community_name = community_name
         self.scroll_level = 2
         self.__get_data()
 
-    def __create_headless_browser(self):
-        pass
+    @staticmethod
+    def __get_posts_data(content):
+        post_ids, posts = content['postIds'], content['posts']
+        data = []
+        for post_id in post_ids:
+            post = posts[post_id]
+            data.append({
+                'post_title': post['title'],
+                'post_link': post['permalink'],
+                'post': post['media']['markdownContent']
+            })
 
-    def __scroll_page(self):
-        scrolling_script = "window.scrollTo(0,document.body.scrollHeight)"
-        self.browser.execute_script(scrolling_script)
-        time.sleep(1)
-        print("@@@ page is fully loaded @@@")
+        return post_ids[-1], data
 
     @staticmethod
-    def __get_community_details(source_code):
-        soup = BeautifulSoup(source_code, 'html.parser')
-        description_element = soup.select_one("div[data-redditstyle=true]")
-        details_element = description_element.next_sibling()
+    def __get_community_details(details):
+        details_value = details.values()[0]
         return {
-            'description': description_element.getText(),
-            'members_count': details_element[0].getText()
+            'description': details_value['publicDescription'],
+            'members_count': details_value['subscribers']
         }
-
-    def __get_posts_urls(self):
-        for _ in range(self.scroll_level):
-            self.__scroll_page()
-        soup = BeautifulSoup(self.browser.page_source, 'html.parser')
-        return [
-            f"https://www.reddit.com{link['href']}"
-            for link in soup.select('a[data-click-id=body]')
-        ]
-
-    def __scrape_post_details(self, post_url):
-        # TODO: for post content check if it contains images, links, lists or texts and parse each of them
-        source_code = load_full_page(self.browser, post_url)
-        soup = BeautifulSoup(source_code, 'html.parser')
-        post_title = soup.select_one('div[data-test-id=post-content] h1').getText()
-        content = " ".join(p.getText() for p in soup.select('div[data-test-id=post-content] p'))
-        return {
-            'title': post_title,
-            'content': content.strip()
-        }
-
-    def __get_posts_data(self, urls):
-        return [self.__scrape_post_details(post_url) for post_url in urls]
 
     def __get_data(self):
-        source_code = load_full_page(self.browser, self.communityURL)
-        posts_urls = self.__get_posts_urls()
-        return self.__get_posts_data(posts_urls)
-        
+        url = f'https://gateway.reddit.com/desktopapi/v1/subreddits/{self.community_name}?sort=hot'
+        content = requests.get(url, timeout=2).json()
+        community_details = self.__get_community_details(content['subredditAboutInfo'])
+        last_id, data = self.__get_posts_data(content)
+        for _ in range(self.scroll_level):
+            url += f'&after={last_id}'
+            content = requests.get(url, timeout=2).json()
+            last_id, scroll_data = self.__get_posts_data(content)
+            data.extend(scroll_data)
+        return {
+            'community_name': self.community_name,
+            'community_details': community_details,
+            'community_data': data
+        }
+
 
 if __name__ == '__main__':
     cr = CrawlReddit()
