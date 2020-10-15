@@ -41,7 +41,7 @@ class ScrapeProxies:
         proxies = []
         for row in table_rows:
             columns = row.findAll("td")
-            if columns[-2].getText() == 'yes':
+            if columns[-2].getText() == 'yes' and columns[-4].getText() == 'elite proxy':
                 proxies.append(f'https://{columns[0].getText()}:{columns[1].getText()}')
         return proxies
 
@@ -62,26 +62,53 @@ class ScrapeProxies:
         proxies = self.__get_proxies()
 
 
-class ScrapeCommunitiesURLS:
+class DB:
+    def __init__(self, data):
+        self.data = data
+
+
+class CrawlReddit:
     def __init__(self, browser=None):
-        self.url = 'https://www.reddit.com/subreddits/'
         if not browser:
             self.browser = create_headless_browser()
         else:
             self.browser = browser
         self.proxies = ScrapeProxies(self.browser)
 
+    def __get_communities_data(self, urls):
+        return [ScrapCommunity(community_url, self.browser) for community_url in urls]
+
+    def __call__(self):
+        urls = ScrapeCommunitiesURLS(self.proxies, self.browser)
+        communities_data = self.__get_communities_data(urls)
+
+        # * store data in postgresql db:
+        DB(communities_data)
+
+
+class ScrapeCommunitiesURLS:
+    def __init__(self, proxies, browser=None):
+        self.url = 'https://www.reddit.com/subreddits/'
+        if not browser:
+            self.browser = create_headless_browser()
+        else:
+            self.browser = browser
+        self.__get_urls()
+
     def __get_category_urls(self, link):
         source_code = load_full_page(self.browser, link)
         soup = BeautifulSoup(source_code, 'html.parser')
         return [link['href'] for link in soup.select('.community-link')]
 
-    def __call__(self):
+    def __get_urls(self):
+        # * Get categories urls:
+        urls = [f'{self.url}{chr(index + 97)}-1' for index in range(26)]
+        urls.append(f'{self.url}0-1')
+
+        # * Get communities urls:
         communities_urls = []
-        for index in range(26):
-            communities_category = f'{self.url}{chr(index + 97)}-1'
-            communities_urls += self.__get_category_urls(communities_category)
-        communities_urls += self.__get_category_urls(f'{self.url}0-1')
+        for category_url in urls:
+            communities_urls += self.__get_category_urls(category_url)
         return communities_urls
 
 
@@ -93,6 +120,7 @@ class ScrapCommunity:
             self.browser = create_headless_browser()
         else:
             self.browser = browser
+        self.__get_data()
 
     def __scroll_page(self):
         scrolling_script = "window.scrollTo(0,document.body.scrollHeight)"
@@ -130,13 +158,16 @@ class ScrapCommunity:
             'content': content.strip()
         }
 
-    def __call__(self):
+    def __get_posts_data(self, urls):
+        return [self.__scrape_post_details(post_url) for post_url in urls]
+
+    def __get_data(self):
         source_code = load_full_page(self.browser, self.communityURL)
         posts_urls = self.__get_posts_urls()
+        return self.__get_posts_data(posts_urls)
         
 
 if __name__ == '__main__':
     headless_browser = create_headless_browser()
-    url = 'https://www.reddit.com/r/pycharm/'
-    sc = ScrapCommunity(url, headless_browser)
-    print(sc())
+    cr = CrawlReddit(headless_browser)
+    print(cr())
