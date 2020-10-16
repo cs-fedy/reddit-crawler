@@ -21,6 +21,7 @@ I'm crawling reddit website, and i want to store them in a database(postgresql m
 3. [python-dotenv](https://pypi.org/project/python-dotenv/): Add .env support to your django/flask apps in development and deployments.
 4. [psycopg2](https://pypi.org/project/psycopg2/): psycopg2 - Python-PostgreSQL Database Adapter.
 5. [tabulate](https://pypi.org/project/tabulate/): Pretty-print tabular data.
+6. [requests](https://pypi.org/project/requests/): Python HTTP for Humans.
 
 ## Scraping tips:
 
