@@ -3,6 +3,7 @@ from bs4 import BeautifulSoup
 from selenium.webdriver.chrome.options import Options
 from selenium import webdriver
 from dotenv import load_dotenv
+from random import randint
 import tabulate
 import requests
 import os
@@ -11,10 +12,8 @@ import time
 load_dotenv()
 
 
-# TODO: use IP Rotation
 # TODO: Set a Real User Agent
 # TODO: Set Other Request Headers
-# TODO: Set Random Intervals In Between Requests
 # TODO: Set a Referrer
 
 
@@ -47,6 +46,7 @@ class ScrapeProxies:
             if columns[-2].getText() == 'yes' and columns[-4].getText() == 'elite proxy':
                 proxies.append({
                     'requests_count': 0,
+                    'start_time': None,
                     'proxy': f'https://{columns[0].getText()}:{columns[1].getText()}'
                 })
         return proxies
@@ -255,7 +255,8 @@ class ScrapCommunity:
         try:
             print(f'@@@ trying {current_proxy.proxy} @@@')
             # * If current max request number is reached use another proxy:
-            if current_proxy['requests_count'] > 450:
+            if current_proxy['requests_count'] > 450 or \
+                    time.time() - current_proxy['start_time'] > 3600:
                 print(f'@@@ proxy {current_proxy.proxy} failed @@@')
                 self.proxies.pop()
                 self.__set_proxy(url)
@@ -264,7 +265,11 @@ class ScrapCommunity:
                 'https': current_proxy['proxy'],
             }
             request = requests.get(url, timeout=5, proxies=proxies)
+            if self.proxies[-1]['requests_count'] == 0:
+                self.proxies[-1]['start_time'] = time.time()
             self.proxies[-1]['requests_count'] += 1
+            random_delay = randint(0, 10)
+            time.sleep(random_delay)
         except:
             print(f'@@@ proxy {current_proxy.proxy} failed @@@')
             self.proxies.pop()

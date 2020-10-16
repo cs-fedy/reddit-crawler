@@ -22,6 +22,14 @@ I'm crawling reddit website, and i want to store them in a database(postgresql m
 4. [psycopg2](https://pypi.org/project/psycopg2/): psycopg2 - Python-PostgreSQL Database Adapter.
 5. [tabulate](https://pypi.org/project/tabulate/): Pretty-print tabular data.
 
+## Scraping tips:
+
+1. Do not follow the same crawling pattern: Incorporate some random clicks on the page, mouse movements and random actions that will make a spider look like a human.
+2. Make requests through Proxies and rotate them as needed: Create a pool of IPs that you can use and use random ones for each request. Along with this, you have to spread a handful of requests across multiple IPs. [How to send requests through a Proxy in Python 3 using Requests](https://www.scrapehero.com/how-to-rotate-proxies-and-ip-addresses-using-python-3/).
+3. Rotate User Agents and corresponding HTTP Request Headers between requests. [How to fake and rotate User Agents using Python 3
+](https://www.scrapehero.com/how-to-fake-and-rotate-user-agents-using-python-3/).
+4. Use a headless browser like Pyppeteer, Selenium or Playwright
+
 ## Author:
 **created at 🌙 with 💻 and ❤ by f0ody**
 * **Fedi abdouli** - **reddit crawler** - [fedi abdouli](https://github.com/cs-fedy)
