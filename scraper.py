@@ -3,6 +3,7 @@ from bs4 import BeautifulSoup
 from selenium.webdriver.chrome.options import Options
 from selenium import webdriver
 from dotenv import load_dotenv
+import tabulate
 import requests
 import os
 import time
@@ -15,7 +16,6 @@ load_dotenv()
 # TODO: Set Other Request Headers
 # TODO: Set Random Intervals In Between Requests
 # TODO: Set a Referrer
-# TODO: save scraped data in a db
 
 
 def create_headless_browser():
@@ -73,9 +73,13 @@ class DB:
         self.__POSTGRES_USER = os.getenv("POSTGRES_USER")
         self.connection = None
         self.cursor = None
-        self.connect()
+        self.__connect()
+        self.__drop_tables(['post', 'subreddit'])
+        self.__create_tables()
+        self.__seed_db()
+        self.__close_connection()
 
-    def connect(self):
+    def __connect(self):
         try:
             self.connection = psycopg2.connect(user=self.__POSTGRES_USER,
                                                password=self.__POSTGRES_PASSWORD,
@@ -87,17 +91,91 @@ class DB:
         except (Exception, psycopg2.Error) as error:
             raise Exception(f"failed to connect to db {error}")
 
-    def close_connection(self):
+    def __close_connection(self):
         self.cursor.close()
         self.connection.close()
         print("PostgreSQL connection is closed")
 
-    def drop_tables(self, tables_names):
+    def __drop_tables(self, tables_names):
         for table_name in tables_names:
             drop_table_query = f"DROP TABLE IF EXISTS {table_name} CASCADE"
             self.cursor.execute(drop_table_query)
             self.connection.commit()
             print(f"table {table_name} dropped")
+
+    def __create_tables(self):
+        queries = []
+        # subreddit(subreddit_name_, subreddit_description, members_count)
+        subreddit_table_query = """
+            CREATE TABLE subreddit(
+                subreddit_name TEXT PRIMARY KEY,
+                subreddit_description TEXT,
+                members_count NUMBER); 
+        """
+        queries.append((subreddit_table_query, "subreddit"))
+
+        # post(post_id_, sub_reddit_name#, post_title, post_url, post_content)
+        post_table_query = """
+            CREATE TABLE post(
+                post_id TEXT PRIMARY KEY,
+                sub_reddit_name TEXT NOT NULL,
+                post_url TEXT,
+                post_title TEXT,
+                post_content TEXT,
+                FOREIGN KEY sub_reddit_name REFERENCES subreddit(subreddit_name)); 
+        """
+        queries.append((post_table_query, "post"))
+
+        # * tables creation
+        for query in queries:
+            query_text, table_name = query
+            self.cursor.execute(query_text)
+            self.connection.commit()
+            print(f"Table {table_name} created successfully in PostgreSQL ")
+
+    def __get_rows(self, table_name):
+        row_select_query = f"SELECT * FROM {table_name}"
+        self.cursor.execute(row_select_query)
+        return [row for row in self.cursor.fetchall()]
+
+    def __get_columns(self, table_name):
+        columns_select_query = f"SELECT column_name FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '{table_name}';"
+        self.cursor.execute(columns_select_query)
+        return [col[0] for col in self.cursor.fetchall()]
+
+    def __show_data(self, table_name):
+        rows = self.__get_rows(table_name)
+        columns = self.__get_columns(table_name)
+        print("=" * 28, f"@ rows in {table_name} table @", "=" * 28)
+        print(tabulate.tabulate(rows, headers=columns, tablefmt="psql"))
+        print("\n")
+
+    def __seed_subreddit_table(self, data):
+        community_name, description, members_count = data.items()
+        seeding_subreddit_query = """ 
+                INSERT INTO subreddit (subreddit_name, subreddit_description, members_count)  
+                VALUES (%s, %s, %s)
+        """
+        self.cursor.execute(seeding_subreddit_query, (community_name, description, members_count))
+        self.connection.commit()
+        print(f"seeding subreddit table with {community_name} details")
+
+    def __seed_post_table(self, data, subreddit_name):
+        post_id, post_title, post_link, post = data.items()
+        # post(post_id_, sub_reddit_name#, post_title, post_url, post_content)
+        seeding_post_query = """ 
+                INSERT INTO subreddit (post_id, sub_reddit_name, post_title, post_url, post_content)  
+                VALUES (%s, %s, %s, %s, %s)
+        """
+        self.cursor.execute(seeding_post_query, (post_id, subreddit_name, post_link, post))
+        self.connection.commit()
+        print(f"seeding post table with {post_id} details")
+
+    def __seed_db(self):
+        for subreddit in self.data:
+            self.__seed_subreddit_table(subreddit['community_details'])
+            self.__seed_post_table(subreddit['community_data'],
+                                   subreddit['community_details']['community_name'])
 
 
 class CrawlReddit:
@@ -105,7 +183,8 @@ class CrawlReddit:
     def __get_communities_data(names):
         communities_data = []
         for community_name in names:
-            communities_data.append(ScrapCommunity(community_name))
+            community_data = ScrapCommunity(community_name).get_data()
+            communities_data.append(community_data)
         return communities_data
 
     def __call__(self):
@@ -141,7 +220,6 @@ class ScrapCommunity:
     def __init__(self, community_name):
         self.community_name = community_name
         self.scroll_level = 2
-        self.__get_data()
 
     @staticmethod
     def __get_posts_data(content):
@@ -150,6 +228,7 @@ class ScrapCommunity:
         for post_id in post_ids:
             post = posts[post_id]
             data.append({
+                'post_id': post_id,
                 'post_title': post['title'],
                 'post_link': post['permalink'],
                 'post': post['media']['markdownContent']
@@ -157,15 +236,15 @@ class ScrapCommunity:
 
         return post_ids[-1], data
 
-    @staticmethod
-    def __get_community_details(details):
+    def __get_community_details(self, details):
         details_value = details.values()[0]
         return {
+            'community_name': self.community_name,
             'description': details_value['publicDescription'],
             'members_count': details_value['subscribers']
         }
 
-    def __get_data(self):
+    def get_data(self):
         url = f'https://gateway.reddit.com/desktopapi/v1/subreddits/{self.community_name}?sort=hot'
         content = requests.get(url, timeout=2).json()
         community_details = self.__get_community_details(content['subredditAboutInfo'])
@@ -176,7 +255,6 @@ class ScrapCommunity:
             last_id, scroll_data = self.__get_posts_data(content)
             data.extend(scroll_data)
         return {
-            'community_name': self.community_name,
             'community_details': community_details,
             'community_data': data
         }
