@@ -273,12 +273,12 @@ class ScrapCommunity:
 
     def get_data(self):
         url = f'https://gateway.reddit.com/desktopapi/v1/subreddits/{self.community_name}?sort=hot'
-        content = requests.get(url, timeout=2).json()
+        content = content = self.__set_proxy(url)
         community_details = self.__get_community_details(content['subredditAboutInfo'])
         last_id, data = self.__get_posts_data(content)
         for _ in range(self.scroll_level):
             url += f'&after={last_id}'
-            content = requests.get(url, timeout=2).json()
+            content = self.__set_proxy(url)
             last_id, scroll_data = self.__get_posts_data(content)
             data.extend(scroll_data)
         return {
