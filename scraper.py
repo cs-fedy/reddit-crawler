@@ -45,7 +45,10 @@ class ScrapeProxies:
         for row in table_rows:
             columns = row.findAll("td")
             if columns[-2].getText() == 'yes' and columns[-4].getText() == 'elite proxy':
-                proxies.append(f'https://{columns[0].getText()}:{columns[1].getText()}')
+                proxies.append({
+                    'requests_count': 0,
+                    'proxy': f'https://{columns[0].getText()}:{columns[1].getText()}'
+                })
         return proxies
 
     def __get_proxies(self):
@@ -179,11 +182,13 @@ class DB:
 
 
 class CrawlReddit:
-    @staticmethod
-    def __get_communities_data(names):
+    def __init__(self):
+        self.proxies = ScrapeProxies().get_data()
+
+    def __get_communities_data(self, names):
         communities_data = []
         for community_name in names:
-            community_data = ScrapCommunity(community_name).get_data()
+            community_data = ScrapCommunity(community_name, self.proxies).get_data()
             communities_data.append(community_data)
         return communities_data
 
@@ -217,8 +222,9 @@ class ScrapeCommunitiesNames:
 
 
 class ScrapCommunity:
-    def __init__(self, community_name):
+    def __init__(self, community_name, proxies):
         self.community_name = community_name
+        self.proxies = proxies
         self.scroll_level = 2
 
     @staticmethod
@@ -243,6 +249,27 @@ class ScrapCommunity:
             'description': details_value['publicDescription'],
             'members_count': details_value['subscribers']
         }
+
+    def __set_proxy(self, url):
+        current_proxy, request = self.proxies[-1], None
+        try:
+            print(f'@@@ trying {current_proxy.proxy} @@@')
+            # * If current max request number is reached use another proxy:
+            if current_proxy['requests_count'] > 450:
+                print(f'@@@ proxy {current_proxy.proxy} failed @@@')
+                self.proxies.pop()
+                self.__set_proxy(url)
+            proxies = {
+                'http': current_proxy['proxy'],
+                'https': current_proxy['proxy'],
+            }
+            request = requests.get(url, timeout=5, proxies=proxies)
+            self.proxies[-1]['requests_count'] += 1
+        except:
+            print(f'@@@ proxy {current_proxy.proxy} failed @@@')
+            self.proxies.pop()
+            self.__set_proxy(url)
+        return request.json()
 
     def get_data(self):
         url = f'https://gateway.reddit.com/desktopapi/v1/subreddits/{self.community_name}?sort=hot'
